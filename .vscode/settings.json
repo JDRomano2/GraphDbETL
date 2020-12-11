@@ -1,3 +1,10 @@
 {
-  "python.pythonPath": "/Users/jdr2160/anaconda3/envs/graphdbetl/bin/python"
+  "python.pythonPath": "/Users/jdr2160/anaconda3/envs/pygraphetl/bin/python",
+  "files.exclude": {
+    "**/.git": false,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/CVS": true,
+    "**/.DS_Store": true
+  }
 }
