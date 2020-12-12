@@ -4,7 +4,7 @@ with open("README.md", "r", encoding="utf-8") as fp:
     long_description = fp.read()
 
 setuptools.setup(
-    name="PyGraphETL-jdromano2",
+    name="pygraphetl",
     version="0.0.1a",
     author="Joseph D. Romano",
     author_email="jdromano2@gmail.com",
@@ -12,6 +12,16 @@ setuptools.setup(
     long_description=long_description,
     url="https://github.com/jdromano2/graphdbetl",
     packages=setuptools.find_packages(),
+    scripts=[
+        'bin/build-graph-db'
+    ],
+    install_requires=[
+        'mysql',
+        'h5py',
+        'tqdm'
+    ],
+    test_suite='nose.collector',
+    tests_require=['nose'],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Environment :: Console",

@@ -1,2 +1,13 @@
 #!/usr/bin/env python3
 
+import graphetl
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Build a graph database aggregated from other third-party databases.')
+parser.add_argument('-f', '--config_file', type=str)
+
+builder = graphetl.GraphDBBuilder()
+
+builder.parse_sources()
+builder.serialize_data(to='csv')
