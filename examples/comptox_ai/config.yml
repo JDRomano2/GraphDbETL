@@ -1,0 +1,53 @@
+%YAML 1.2
+---
+
+Database:
+  name: ComptoxAI
+  version: 0.2a
+  author: Joseph D. Romano
+  website: http://comptox.ai
+  repository: https://github.com/JDRomano2/comptox_ai
+
+Sources:
+  - AOP-DB:
+    source type: mysql
+    database name: aopdb
+    config file: ~/.my.cnf
+
+Nodes:
+  - Gene:
+    id_key_label: entrez_gene_id
+    sources:
+      - AOP-DB:
+        table: gene_info
+        id_key: entrez
+        uri_key: HUGO_id
+  - AOP:
+    sources:
+      - AOP-DB:
+        table: aop_info
+        id_key: AOP_id
+        uri_key: AOP_name
+  - Disease:
+    sources:
+      - AOP-DB:
+        table:
+
+Relationships:
+  - GENE_INTERACTS_WITH_DISEASE:
+    sources:
+      - AOP-DB:
+        type: foreign key
+        start:
+          node: Gene
+          table: gene_info
+          key: entrez
+        end:
+          node: Disease
+          key: entrez
+          table: disease_info
+  - AOP_INCLUDES_GENE:
+    sources:
+      - AOP-DB:
+        type: join_table
+        table:

@@ -18,7 +18,8 @@ setuptools.setup(
     install_requires=[
         'mysql',
         'h5py',
-        'tqdm'
+        'tqdm',
+        'pyyaml'
     ],
     test_suite='nose.collector',
     tests_require=['nose'],
