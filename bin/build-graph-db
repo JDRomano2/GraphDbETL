@@ -6,8 +6,11 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Build a graph database aggregated from other third-party databases.')
 parser.add_argument('-f', '--config_file', type=str)
+parser.add_argument('-m', '--mysql_config_file', type=str, default='~/.my.cnf')
 
-builder = graphetl.GraphDBBuilder()
+args = parser.parse_args()
 
-builder.parse_sources()
-builder.serialize_data(to='csv')
+builder = graphetl.GraphDBBuilder(config_file_path = args.config_file, mysql_config_file = args.mysql_config_file)
+
+builder.build()
+#builder.serialize_data(to='csv')

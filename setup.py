@@ -16,8 +16,8 @@ setuptools.setup(
         'bin/build-graph-db'
     ],
     install_requires=[
-        'mysql',
-        'h5py',
+        'mysql-connector-python',
+        'tables',
         'tqdm',
         'pyyaml'
     ],
