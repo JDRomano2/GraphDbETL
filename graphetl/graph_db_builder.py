@@ -12,6 +12,7 @@ import tables
 import numpy as np
 
 from .sql_io import get_mysql_connection
+from .dtypes import *
 
 import ipdb
 
@@ -40,9 +41,18 @@ class GraphDBBuilder():
     def _initialize_tables(self):
         # Go through each node, and create a list of (column_name, dtype) tuples
 
+        db_name = self.config['Database']['name']
+        db_version = self.config['Database']['version']
+
+        # Make pytables file and groups
+        self.h5_file = tables.open_file("{0}-{1}.h5".format(db_name, db_version), mode='w', title=db_name)
+        self.node_tables = self.h5_file.create_group("/", 'nodes', 'Node tables')
+        self.relationship_tables = self.h5_file.create_group("/", 'relationships', 'Relationship tables')
+
         mysql_query_template = "SELECT * FROM {0} LIMIT 1;"
 
-        tables_pre = {}
+        node_tables_pre = {}
+        relationship_tables_pre = {}
 
         for node_label, node_label_config in self.config['Nodes'].items():
 
@@ -54,16 +64,28 @@ class GraphDBBuilder():
                     this_cur = self.mysql_dbs[s_name].cursor(buffered=True)
                     this_cur.execute(this_qry)
 
-                    this_source_fields = description_to_fields(this_cur.description)
+                    field_descr = description_to_fields(this_cur.description)
+                    field_names, field_types = list(zip(*field_descr))
+
+                    # now, map fields to pytables types
+                    np_types = [map_pytables[x] for x in field_types]
+                    types_structured = list(zip(field_names, np_types))
                 else:
                     raise NotImplementedError
 
-                all_sources_fields += this_source_fields
+                all_sources_fields += types_structured
             
             # merge fields from all sources
             node_fields_merged = merge_fields(all_sources_fields)
 
-            tables_pre[node_label] = node_fields_merged
+            #data_descr = np.dtype(node_fields_merged)
+            # See: https://stackoverflow.com/questions/58261748 ("Option 2")
+            data_descr = make_table_dict_descr(node_fields_merged)
+
+            node_tables_pre[node_label] = data_descr
+
+        for label, fields in node_tables_pre.items():
+            make_table(self.h5_file, self.node_tables, label, fields)
 
         # TODO: Make tables for relationship types
 
@@ -139,8 +161,8 @@ def merge_fields(all_sources_fields):
     for name in field_names_unique:
         dtypes_list = [v for n, v in all_sources_fields if n == name]
 
-        assert len(set(dtypes_list)) <= 1
-
+        assert len(set([x.type for x in dtypes_list])) <= 1
+        
         fields_merged.append((name, dtypes_list[0]))
 
     return fields_merged
@@ -174,3 +196,19 @@ def read_config_file(conf_file_path):
     with open(conf_file_path, 'r') as cf:
         yml_config = load(cf, Loader=Loader)
     return yml_config
+
+def make_table_dict_descr(field_tuples):
+    descr = dict()
+    for ft_name, ft_type in field_tuples:
+        descr[ft_name] = ft_type
+    return descr
+
+def make_table(h5file, group, table_name, table_fields):
+    """Create a PyTables table to store graph data in HDF5 format.
+    """
+
+    #column_description = np.dtype(table_fields)
+
+    tab = h5file.create_table(group, table_name, table_fields, "{0} table".format(table_name))
+    
+    return tab
