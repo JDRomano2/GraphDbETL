@@ -39,6 +39,9 @@ class GraphDBBuilder():
         self.config = read_config_file(config_file_path)
         self.mysql_config_file = mysql_config_file
 
+        self.nodes = dict()  # keys: node labels; values: NodeType
+        self.relationships = dict()  # keys: relationship type labels; values: RelationshipType
+
         try:
             if mysql_config_file:
                 logging.info("Establishing MySQL connection...")
@@ -91,6 +94,7 @@ class GraphDBBuilder():
         db_version = self.config['Database']['version']
 
         # Make pytables file and groups
+        logging.info("Making HDF5 database...")
         self.h5_file = tables.open_file("{0}-{1}.h5".format(db_name, db_version), mode='w', title=db_name)
         self.node_tables = self.h5_file.create_group("/", 'nodes', 'Node tables')
         self.relationship_tables = self.h5_file.create_group("/", 'relationships', 'Relationship tables')
@@ -100,11 +104,16 @@ class GraphDBBuilder():
         node_tables_pre = {}
         relationship_tables_pre = {}
 
+        # Determine node table names and fields
+        logging.info(" Making tables for each node type...")
         for node_label, node_label_config in self.config['Nodes'].items():
+            logging.info(f"  NODE TYPE: {node_label}")
 
             all_sources_fields = []
             for s_name, s_config in node_label_config['sources'].items():
+                logging.info(f"   SOURCE DB: {s_name}")
                 if self.source_type_map[s_name] == 'mysql':
+                    logging.info(f"    DB TYPE: mysql")
                     # query the database, pull out fields
                     this_qry = mysql_query_template.format(s_config['table'])
                     this_cur = self.mysql_dbs[s_name].cursor(buffered=True)
@@ -116,6 +125,7 @@ class GraphDBBuilder():
                     # now, map fields to pytables types
                     np_types = [map_pytables[x] for x in field_types]
                     types_structured = list(zip(field_names, np_types))
+                    logging.info(f"    FIELDS: {field_names}")
                 else:
                     raise NotImplementedError
 
@@ -130,19 +140,47 @@ class GraphDBBuilder():
 
             node_tables_pre[node_label] = data_descr
 
+        # Build the node tables
         for label, fields in node_tables_pre.items():
-            make_table(self.h5_file, self.node_tables, label, fields)
+            tab_ref = make_table(self.h5_file, self.node_tables, label, fields)
             #ipdb.set_trace()
-            self._store_table_details()
+            # TODO: Need to feed sources in (4th argument)
+            self._store_table_details(tab_ref, label, fields, None, 'node')
 
-        # TODO: Make tables for relationship types
+        # TODO: Rinse and repeat for relationship tables
 
         return True
 
-    def _store_table_details(self):
+    def _store_table_details(self, table_ref, node_or_rel_label, table_fields, table_sources, table_type):
+        """Store internal description of an HDF5 table to be organized into a
+        'directory of node tables'.
         
-        pass
+        We already created the HDF5 table, now we just are storing a reference
+        to it and what the fields/sources for that table are.
+        """
 
+        if table_type == 'node':
+            node = NodeType(
+                node_type_label=node_or_rel_label,
+                dest_table=table_ref,
+                sources=table_sources
+            )
+            self.nodes[node_or_rel_label] = node
+
+            logging.info("New node type added to PyGraphETL:")
+            logging.info(node)
+        elif table_type == 'relationship':
+            rel = RelationshipType(
+                rel_type_label=node_or_rel_label, start_node_type=None,
+                end_node_type=None, dest_table=table_ref, sources=table_sources
+            )
+            self.relationships[node_or_rel_label] = rel
+
+            logging.info("New relationship type added to PyGraphETL:")
+            logging.info(rel)
+        else:
+            raise TypeError("`table_type` must one of {'node', 'relationship'}.")
+        
     def _process_config(self):
         logging.info("Parsing configuration...")
         try:
@@ -192,7 +230,7 @@ class GraphDBBuilder():
         for node_label, node_config in self.config['Nodes'].items():
             logging.info(f"  node label: {node_label}")
             for this_node_source, source_options in node_config['sources'].items():
-                logging.info(f"    source: {this")
+                logging.info(f"    source: {this_node_source}")
                 self._parse_source_dispatcher(node_label, this_node_source, source_options)
 
     def parse_relationships(self):
@@ -296,8 +334,6 @@ def make_table(h5file, group, table_name, table_fields):
     """Create a PyTables table to store graph data in HDF5 format.
     """
 
-    #column_description = np.dtype(table_fields)
-
     tab = h5file.create_table(group, table_name, table_fields, "{0} table".format(table_name))
-    
+
     return tab
