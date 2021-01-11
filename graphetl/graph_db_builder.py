@@ -1,4 +1,6 @@
 from yaml import load
+from dataclasses import dataclass, field
+import logging
 try:
     from yaml import CLoader as Loader
 except ImportError:
@@ -7,7 +9,6 @@ from tqdm import tqdm
 from collections import defaultdict
 import mysql.connector
 from mysql.connector import FieldType
-
 import tables
 import numpy as np
 
@@ -16,29 +17,74 @@ from .dtypes import *
 
 import ipdb
 
+logging.basicConfig(level=logging.DEBUG)
+
+@dataclass
+class NodeType:
+    node_type_label: str
+    dest_table: tables.Table
+    sources: list = field(default_factory=list)
+
+@dataclass
+class RelationshipType:
+    rel_type_label: str
+    start_node_type: NodeType
+    end_node_type: NodeType
+    dest_table: tables.Table
+    sources: list = field(default_factory=list)
 
 class GraphDBBuilder():
     def __init__(self, config_file_path, mysql_config_file):
+        logging.info("Reading configuration file.")
         self.config = read_config_file(config_file_path)
         self.mysql_config_file = mysql_config_file
 
         try:
             if mysql_config_file:
+                logging.info("Establishing MySQL connection...")
                 self.mysql_conn = get_mysql_connection(mysql_config_file)
+                logging.info("...done.")
             else:
+                logging.warning("No MySQL configuration provided - was this intentional?")
                 self.mysql_conn = get_mysql_connection()
         except mysql.connector.Error as err:
-            print("Warning: No MySQL database connection available. Skipping MySQL sources.")
+            logging.warning("Warning: Error connecting to MySQL using the provided connection details. Skipping MySQL sources.")
+            print(err)
             self.mysql_conn = None
 
         self._process_config()
 
         self._initialize_tables()
 
-    def build(self):
+    def build_hdf5_database(self):
+        """
+        Make an HDF5 file containing a graph database.
+
+        The HDF5 version of the graph database is comprised of a set of Node
+        tables (each table is a node type and each row in a table is a node,
+        including node features), and a set of Relationship tables (similarly,
+        each table corresponding to a relationship type and each row
+        corresponding to a relationship plus any relationship features).
+
+        Other PyGraphETL routines can be used to stream the HDF5 database into
+        a GDMS (e.g., Neo4j).
+        """
+        # TODO: Make sure we've processed a configuration
         self.parse_nodes()
+        self.parse_relationships()
 
     def _initialize_tables(self):
+        """
+        Create empty PyTables tables for all node types and relationship types.
+
+        Notes
+        -----
+        This method is a bit more sophisticated than just creating an empty
+        table for each node and relationship type. It has to actually determine
+        the set of data fields and their corresponding (harmonized) datatypes
+        across all relevant sources. In other words, it "peeks" into each
+        source, finds out fields and their types, and then merges them.
+        """
         # Go through each node, and create a list of (column_name, dtype) tuples
 
         db_name = self.config['Database']['name']
@@ -86,12 +132,19 @@ class GraphDBBuilder():
 
         for label, fields in node_tables_pre.items():
             make_table(self.h5_file, self.node_tables, label, fields)
+            #ipdb.set_trace()
+            self._store_table_details()
 
         # TODO: Make tables for relationship types
 
         return True
 
+    def _store_table_details(self):
+        
+        pass
+
     def _process_config(self):
+        logging.info("Parsing configuration...")
         try:
             self.db_name = self.config['Database']['name']
             self.db_version = self.config['Database']['version']
@@ -103,7 +156,9 @@ class GraphDBBuilder():
             mysql_dbs = dict()
             self.source_type_map = dict()
 
+            logging.info(" Parsing sources:")
             for source_name, source_config in self.config['Sources'].items():
+                logging.info(f"  {source_name}")
                 self.source_type_map[source_name] = source_config['source type']
                 
                 if source_config['source type'] == 'mysql':
@@ -128,10 +183,20 @@ class GraphDBBuilder():
             print("Please check the documentation.")
 
     def parse_nodes(self):
+        """
+        For each node type in the config, and for each source containing nodes
+        of that type, read the node data and feed into the appropriate pytables
+        object.
+        """
+        logging.info("Parsing nodes...")
         for node_label, node_config in self.config['Nodes'].items():
+            logging.info(f"  node label: {node_label}")
             for this_node_source, source_options in node_config['sources'].items():
-                
+                logging.info(f"    source: {this")
                 self._parse_source_dispatcher(node_label, this_node_source, source_options)
+
+    def parse_relationships(self):
+        raise NotImplementedError
             
     def _parse_source_dispatcher(self, node_label, source_name, node_source_options):
         source_type = self.source_type_map[source_name]
@@ -141,7 +206,18 @@ class GraphDBBuilder():
             source_table = node_source_options['table']
             source_id_key = node_source_options['id_key']
             source_uri_key = node_source_options['uri_key']
-            parse_mysql_source(source_cnx, node_label, source_table, source_id_key, source_uri_key)
+
+            #ipdb.set_trace()
+
+            # For each table in the mysql source, find matching
+            # destination tables
+
+            dest_table = self.find_destination_tables(source_name)
+            
+            parse_mysql_source(source_cnx, node_label, source_table, source_id_key, source_uri_key, dest_table)
+
+    def find_destination_tables(self, source_name):
+        pass
 
     def parse_relationships(self):
         pass
@@ -184,12 +260,25 @@ def description_to_fields(mysql_cur_description):
 
     return fields
 
-def parse_mysql_source(cnx, node_label, source_table, source_id_key, source_uri_key):
+def parse_mysql_source(cnx, node_label, source_table, source_id_key, source_uri_key, destination_table):
     cursor = cnx.cursor()
     sql_query = "SELECT * FROM {0};".format(source_table)
     cursor.execute(sql_query)
 
-    ipdb.set_trace()
+    # Stream results into the PyTables table
+
+    result = safe_stream_mysql_to_pytable(cursor, destination_table)
+
+    #ipdb.set_trace()
+
+def safe_stream_mysql_to_pytable(mysql_cur, output_table):
+    for query_res in mysql_cur:
+        #ipdb.set_trace()
+        #print()
+        break
+
+    # TODO: Return something intelligent to check for possible errors
+    return 1
 
 def read_config_file(conf_file_path):
     """Parse a YAML config file for PyGraphETL."""

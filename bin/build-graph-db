@@ -12,5 +12,5 @@ args = parser.parse_args()
 
 builder = graphetl.GraphDBBuilder(config_file_path = args.config_file, mysql_config_file = args.mysql_config_file)
 
-builder.build()
+builder.build_hdf5_database()
 #builder.serialize_data(to='csv')
