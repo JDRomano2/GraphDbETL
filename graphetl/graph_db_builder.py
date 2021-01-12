@@ -1,3 +1,35 @@
+"""
+graph_db_builder.py
+===================
+
+Code for building new graph databases using PyGraphETL.
+
+Algorithm overview
+------------------
+- Initialize database builder
+    - Process configuration file
+    - Connect to source databases
+        - Connect to MySQL databases using `mysql.connector`
+        - # TODO: Connect to other DBMS sources
+        - # TODO: Get relative paths to tabular data / flat files
+    - Initialize output tables
+        - For each node type $N$ in $\mathcal{N}$:
+            - Find all source databases $\mathcal{S}_N$ containing instances of $N$
+            - Get a merged list of data fields (and their types) across $\mathcal{S}_N$
+            - Initialize a PyTables table for $N$ with appropriate fields
+        - For each relationship type $R$ in $\mathcal{R}$:
+            - # TODO
+- Build database
+    - Build node tables
+        - For each node type $N$:
+            - For each source database $S$ containing instances of $N$:
+                - Fetch the output table $T$ that holds instances of $N$
+                - Map fields in $S$ to columns in $T$
+                - Stream entries in $S$ to $T$, handling missing values as needed
+    - Build relationship tables
+        - # TODO
+"""
+
 from yaml import load
 from dataclasses import dataclass, field
 import logging
@@ -34,6 +66,18 @@ class RelationshipType:
     sources: list = field(default_factory=list)
 
 class GraphDBBuilder():
+    """
+    Builder class for constructing a graph database.
+
+    Parameters
+    ----------
+    config_file_path : str
+        Path to a configuration file. File should follow the format described
+        in the PyGraphETL documentation (# TODO: write and provide link).
+    mysql_config_file : str
+        Path to a MySQL configuration file (e.g., `~/.my.cnf`) with read
+        privileges for any MySQL source databases mentioned in the config file.
+    """
     def __init__(self, config_file_path, mysql_config_file):
         logging.info("Reading configuration file.")
         self.config = read_config_file(config_file_path)
