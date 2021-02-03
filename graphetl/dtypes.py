@@ -80,12 +80,13 @@ import numpy as np
 # http://mysql-python.sourceforge.net/MySQLdb-1.2.2/public/MySQLdb.constants.FIELD_TYPE-module.html
 map_numpy = {
     'VAR_STRING': str,
-    'LONG': np.int32,
+    'LONG': np.int16,
     'FLOAT': np.float
 }
 
+# TODO: Figure out variable length string atoms with references in the actual table. Or calibrate string field width (or both).
 map_pytables = {
-    'VAR_STRING': tb.StringCol(256),  # 256 is relatively arbitrary - pytables doesn't support variable length strings
-    'LONG': tb.Int32Col(),
-    'FLOAT': tb.Float32Col()
+    'VAR_STRING': tb.StringCol(32),  # 32 is relatively arbitrary - pytables doesn't support variable length strings
+    'LONG': tb.Int16Col(),
+    'FLOAT': tb.Float16Col()
 }

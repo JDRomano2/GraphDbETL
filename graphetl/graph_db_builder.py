@@ -43,6 +43,7 @@ import mysql.connector
 from mysql.connector import FieldType
 import tables
 import numpy as np
+import unicodedata
 
 from .sql_io import get_mysql_connection
 from .dtypes import *
@@ -65,6 +66,15 @@ class RelationshipType:
     dest_table: tables.Table
     sources: list = field(default_factory=list)
 
+def safe_itemgetter(*items):
+    if len(items) == 1:
+        item = items[0]
+        def g(obj):
+            return obj[item]
+    else:
+        def g(obj):
+            return tuple(obj[item] for item in items )
+
 class GraphDBBuilder():
     """
     Builder class for constructing a graph database.
@@ -85,6 +95,7 @@ class GraphDBBuilder():
 
         self.nodes = dict()  # keys: node labels; values: NodeType
         self.relationships = dict()  # keys: relationship type labels; values: RelationshipType
+        self.source_field_lists = dict()  # dict (key - source) of dicts (key - table; value - list of field names)
 
         try:
             if mysql_config_file:
@@ -166,6 +177,15 @@ class GraphDBBuilder():
                     field_descr = description_to_fields(this_cur.description)
                     field_names, field_types = list(zip(*field_descr))
 
+                    # If we haven't seen this source already, store field names
+
+                    # Make sure we have a dict for the source
+                    if not s_name in self.source_field_lists:
+                        self.source_field_lists[s_name] = dict()
+                    # Then, add the field names for the table to this dict
+                    if not s_config['table'] in self.source_field_lists[s_name]:
+                        self.source_field_lists[s_name][s_config['table']] = field_names
+
                     # now, map fields to pytables types
                     np_types = [map_pytables[x] for x in field_types]
                     types_structured = list(zip(field_names, np_types))
@@ -186,16 +206,16 @@ class GraphDBBuilder():
 
         # Build the node tables
         for label, fields in node_tables_pre.items():
+            # Make the table
             tab_ref = make_table(self.h5_file, self.node_tables, label, fields)
-            #ipdb.set_trace()
-            # TODO: Need to feed sources in (4th argument)
-            self._store_table_details(tab_ref, label, fields, None, 'node')
+            # Store reference to table along with metadata
+            self._store_table_details(tab_ref, label, fields, 'node')
 
         # TODO: Rinse and repeat for relationship tables
 
         return True
 
-    def _store_table_details(self, table_ref, node_or_rel_label, table_fields, table_sources, table_type):
+    def _store_table_details(self, table_ref, node_or_rel_label, table_fields, table_type):
         """Store internal description of an HDF5 table to be organized into a
         'directory of node tables'.
         
@@ -207,12 +227,17 @@ class GraphDBBuilder():
             node = NodeType(
                 node_type_label=node_or_rel_label,
                 dest_table=table_ref,
-                sources=table_sources
+                #sources=table_sources
             )
             self.nodes[node_or_rel_label] = node
 
             logging.info("New node type added to PyGraphETL:")
             logging.info(node)
+
+            # Add source mapping info
+            # TODO: Can we move this out of the 'if' block and repurpose for rels?
+            for s_name, s_config in self.config['Nodes'][node_or_rel_label]['sources'].items():
+                self.add_source_to_node_type(self.nodes[node_or_rel_label], s_name, s_config, table_fields)
         elif table_type == 'relationship':
             rel = RelationshipType(
                 rel_type_label=node_or_rel_label, start_node_type=None,
@@ -224,6 +249,45 @@ class GraphDBBuilder():
             logging.info(rel)
         else:
             raise TypeError("`table_type` must one of {'node', 'relationship'}.")
+    
+    def add_source_to_node_type(self, node_type, source_name, source_config, target_fields):
+        """
+        Append details for a data source to a specific NodeType instance.
+
+        Parameters
+        ----------
+        node_type : NodeType
+            Instance of NodeType to which we will add a new source.
+        source_name : str
+            String name of the source as given in the config file/dict. 
+        source_config : dict
+            Dictionary containing the config information for the source with
+            respect to the current node type, as given in the config file/dict.
+        source_fields : list
+        target_fields : list
+        """
+
+        #ipdb.set_trace()
+        source_fields = self.source_field_lists[source_name][source_config['table']]
+
+        # Make mapping function (maps source fields to target fields).
+        # If a target field isn't defined for a source, the value should map to
+        # `None`.
+        field_idx_map = []
+        for field in target_fields:
+            # Find field in source (if it exists)
+            try:
+                field_idx_map.append(source_fields.index(field))
+            except ValueError:
+                field_idx_map.append(None)
+
+        node_type.sources.append({
+            'source_name': source_name,
+            'source_table_name': source_config['table'],
+            'config_file_data': source_config,
+            'field_names': source_fields,
+            'field_idx_map': field_idx_map
+        })
         
     def _process_config(self):
         logging.info("Parsing configuration...")
@@ -281,25 +345,61 @@ class GraphDBBuilder():
         raise NotImplementedError
             
     def _parse_source_dispatcher(self, node_label, source_name, node_source_options):
+        """
+        Infer and then call the correct function to parse a node type from a single source.
+
+        The actual parsing functions are implemented outside of the GraphDBBuilder class. 
+
+        Parameters
+        ----------
+        node_label : str
+            Node label for the class of node you are going to parse.
+        source_name : str
+            Name of the source database from which nodes will be parsed.
+        node_source_options : dict
+            Dict containing other necessary details about the source pertaining
+            to the current node label.
+        """
         source_type = self.source_type_map[source_name]
+
+        sources = self.nodes[node_label].sources
+        this_source = next(s for s in sources if s['source_name'] == source_name)
+        
+        source_fields = this_source['field_names']
+        source_field_idx_map = this_source['field_idx_map']
 
         if source_type == 'mysql':
             source_cnx = self.mysql_dbs[source_name]
+            source_name = this_source['source_name']
             source_table = node_source_options['table']
             source_id_key = node_source_options['id_key']
             source_uri_key = node_source_options['uri_key']
 
-            #ipdb.set_trace()
-
             # For each table in the mysql source, find matching
             # destination tables
 
-            dest_table = self.find_destination_tables(source_name)
+            dest_table = self.find_destination_table(node_label)
             
-            parse_mysql_source(source_cnx, node_label, source_table, source_id_key, source_uri_key, dest_table)
+            parse_mysql_source(source_cnx, node_label, source_name, source_table, 
+                               source_id_key, source_uri_key, dest_table,
+                               source_fields, source_field_idx_map)
 
-    def find_destination_tables(self, source_name):
-        pass
+    def find_destination_table(self, node_label):
+        """
+        Return a reference to the PyTables object corresponding to a certain
+        node label.
+
+        Parameters
+        ----------
+        node_label : str
+            Node label corresponding to the desired destination table.
+
+        Returns
+        -------
+        tables.Table
+            PyTables table corresponding to `node_label`.
+        """
+        return self.nodes[node_label].dest_table
 
     def parse_relationships(self):
         pass
@@ -342,23 +442,103 @@ def description_to_fields(mysql_cur_description):
 
     return fields
 
-def parse_mysql_source(cnx, node_label, source_table, source_id_key, source_uri_key, destination_table):
+def parse_mysql_source(cnx, node_type, source_name, source_table, source_id_key,
+                       source_uri_key, destination_table, source_fields,
+                       source_field_idx_map):
+    """
+    Parse records from a source MySQL table and stream the results into a
+    destination PyTables table.
+    
+    Arguments
+    ---------
+    cnx : mysql.connector.connection_cext.CMySQLConnection
+        An active connection to a MySQL database containing the source tables,
+        with read permissions.
+    node_type : NodeType
+        Instance of NodeType describing the node type that will be populated.
+    source_name : str
+        Name of the source database containing nodes of interest.
+    source_table : str
+        Name of the table in the source database containing nodes of interest.
+    source_id_key : str
+        Column name corresponding to the main ID key used to determine whether
+        a node has already been seen (e.g., 'do we merge the node data into an
+        existing record in the output table, or do we create a new record?')
+    source_uri_key : str
+        Column name that will be used to determine the URI of the node in the
+        output graph database.
+    destination_table : tables.Table
+        A PyTables table object where the parsed nodes will be placed.
+    source_fields : tuple of str
+        Ordered tuple of fields corresponding to columns in the data source.
+    source_field_idx_map : list of int
+        List of indices of the source table mapped to their equivalent order in
+        the destination table. If a source table doesn't contain one (or more)
+        of the fields present in the destination table, they should map to
+        `None` (i.e., they should be filled with the default value for that
+        field).
+    """
     cursor = cnx.cursor()
     sql_query = "SELECT * FROM {0};".format(source_table)
     cursor.execute(sql_query)
 
     # Stream results into the PyTables table
+    result = safe_stream_mysql_to_pytable(cursor, destination_table, source_fields, source_field_idx_map)
 
-    result = safe_stream_mysql_to_pytable(cursor, destination_table)
+def convert_fields_from_descr():
+    pass
+
+def safe_stream_mysql_to_pytable(mysql_cur, output_table, qry_fields, map_idxs, verbosity=0):
+    """
+    Stream results of a MySQL query into a PyTables table.
+
+    Notably, this function maintains a record of already-seen nodes (based on
+    the primary ID) and either merges data or creates a new entry, accordingly.
+
+    Rows are appended to the table individually.
+
+    TODO: Add functionality to insert data in blocks, for the sake of
+    efficiency.
+
+    Arguments
+    ---------
+
+    """
+
+    # TODO: Check qry_fields against fields in destination_table to make sure
+    # everything matches up
+
+    BLOCK_SIZE = 10 # number of rows to add at once
+    
+    #ipdb.set_trace()
+    # block = []  # a block of rows we are going to add to the table
+    row = output_table.row
+    for query_res in tqdm(mysql_cur):
+        #row = [query_res[x] for x in map_idxs]
+        # Use dict-like API for inserting data by field name rather than as an
+        # ordered tuple.
+        # TODO: Evaluate speed difference of these two alternate methods
+        for f, d in zip(qry_fields, query_res):
+            try:
+                row[f] = d
+            except TypeError as e:
+                if d is None:
+                    continue
+                row[f] = unicodedata.normalize('NFKD', d).encode('ascii', 'ignore')
+                #ipdb.set_trace()
+                #print(e)
+        row.append()
+
+        #ipdb.set_trace()
+        #block.append(row)
+        # if len(block) == BLOCK_SIZE:
+        #     output_table.append(block)
+        #     block.clear()
+    # Edge case - for last len(mysql_cur) \ BLOCK_SIZE rows
+    # output_table.append(block)
+    # block.clear()
 
     #ipdb.set_trace()
-
-def safe_stream_mysql_to_pytable(mysql_cur, output_table):
-    for query_res in mysql_cur:
-        #ipdb.set_trace()
-        #print()
-        break
-
     # TODO: Return something intelligent to check for possible errors
     return 1
 
@@ -369,7 +549,7 @@ def read_config_file(conf_file_path):
     return yml_config
 
 def make_table_dict_descr(field_tuples):
-    descr = dict()
+    descr = defaultdict()
     for ft_name, ft_type in field_tuples:
         descr[ft_name] = ft_type
     return descr
